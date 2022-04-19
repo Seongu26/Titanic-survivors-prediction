@@ -1,0 +1,244 @@
+---
+title: "HW3"
+author: "Seongu Lee"
+date: "4/19/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("discrim")
+#install.packages("poissonreg")
+#install.packages("corrr")
+
+```
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(discrim)
+library(poissonreg)
+library(corrr)
+library(klaR)
+library(corrplot)
+```
+
+```{r}
+titanic <- read.csv("C:/Users/sungu/OneDrive/Desktop/homework-3/homework-3/data/titanic.csv")
+titanic$survived = factor(titanic$survived,levels = c("Yes","No"))
+titanic$pclass = factor(titanic$pclass)
+```
+
+### Question1
+```{r}
+set.seed(731)
+
+split <- initial_split(titanic, prop = 0.80,strata = survived)
+train <- training(split)
+test<- testing(split)
+table(is.na(train))
+```
+
+So, the train set will have 712 rows and test set will have 179 rows about 80% of the total data set. Also, I can see some NA values from the training set on the cabin and age columns. Stratified sampling helps to find the best distribution with survived column. 
+
+
+### Question2
+```{r}
+train %>% 
+  ggplot(aes(x = survived)) +
+  geom_bar()
+table(train$survived)
+```
+
+There are less survived people than non survived people. There are 273 survived people and 439 non survived people.
+
+
+### Question3
+```{r}
+num <- unlist(lapply(train, is.numeric)) 
+num
+
+```
+
+```{r}
+cor_train <- train %>%
+  dplyr::select(-c(survived,pclass,name,sex,ticket,cabin,embarked)) %>%
+  correlate()
+rplot(cor_train)
+
+cor_train %>%
+  stretch() %>%
+  ggplot(aes(x, y, fill = r)) +
+  geom_tile() +
+  geom_text(aes(label = as.character(fashion(r))))
+```
+
+The visualization matrix is symmetric. sib_sp are negatively correlated with passenger_id, parch are negatively correlated with age and positively correlated with fare and sib_sp. fare are positively correlated with age and sib_sp.
+
+
+### Question4
+```{r}
+reciped <- recipe(survived ~ pclass+sex+age+sib_sp+parch+fare, data = train) %>% 
+  step_impute_linear(age) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_interact(~ starts_with("sex"):fare) %>% 
+  step_interact(~ age:fare)
+reciped
+```
+
+### Question5
+```{r}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+```
+
+```{r}
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(reciped)
+
+log_fit <- fit(log_wkflow, train)
+```
+
+```{r}
+log_fit %>% 
+  tidy()
+```
+
+
+### Question6
+
+```{r}
+lin_reg <- discrim_linear() %>% 
+  set_engine("MASS") %>% 
+  set_mode("classification")
+```
+
+```{r}
+lin_wkflow <- workflow() %>% 
+  add_model(lin_reg) %>% 
+  add_recipe(reciped)
+
+lin_fit <- fit(lin_wkflow, train)
+```
+
+### Question7
+
+```{r}
+qd_reg <- discrim_quad() %>% 
+  set_engine("MASS") %>% 
+  set_mode("classification")
+```
+
+```{r}
+qd_wkflow <- workflow() %>% 
+  add_model(qd_reg) %>% 
+  add_recipe(reciped)
+
+qd_fit <- fit(qd_wkflow, train)
+```
+
+### Question8
+
+```{r}
+nb_mod <- naive_Bayes() %>% 
+  set_mode("classification") %>% 
+  set_engine("klaR") %>% 
+  set_args(usekernel = FALSE) 
+
+nb_wkflow <- workflow() %>% 
+  add_model(nb_mod) %>% 
+  add_recipe(reciped)
+
+nb_fit <- fit(nb_wkflow, train)
+```
+
+### Question9
+
+Log Reg.
+
+```{r}
+log<- bind_cols(predict(log_fit, new_data = train), train%>%dplyr::select(survived))
+log_acc <- log %>%
+  accuracy(truth = survived, estimate = .pred_class)
+log_acc
+```
+Same value with using only predict
+
+```{r}
+logpred<- predict(log_fit, new_data = train, type = "prob")
+
+loga_acc <- augment(log_fit, new_data = train) %>%
+  accuracy(truth = survived, estimate = .pred_class)
+loga_acc
+```
+LDA.
+
+```{r}
+lin<- bind_cols(predict(lin_fit, new_data = train), train%>%dplyr::select(survived))
+lin_acc <- lin %>%
+  accuracy(truth = survived, estimate = .pred_class)
+lin_acc
+```
+
+QDA.
+
+```{r}
+qd<- bind_cols(predict(qd_fit, new_data = train), train%>%dplyr::select(survived))
+qd_acc <- qd %>%
+  accuracy(truth = survived, estimate = .pred_class)
+qd_acc
+```
+Naive Bayes.
+
+```{r, warning = FALSE}
+nb<- bind_cols(predict(nb_fit, new_data = train), train%>%dplyr::select(survived))
+nb_acc <- nb %>%
+  accuracy(truth = survived, estimate = .pred_class)
+nb_acc
+```
+
+Comparing Model Performance
+
+```{r}
+accuracies <- c(log_acc$.estimate, lin_acc$.estimate, 
+                nb_acc$.estimate, qd_acc$.estimate)
+models <- c("Logistic Regression", "LDA", "Naive Bayes", "QDA")
+results <- tibble(accuracies = accuracies, models = models)
+results %>% 
+  arrange(-accuracies)
+```
+
+Logtistic Regression achieved the highest accuracy. 
+
+### question10
+
+```{r}
+head(predict(log_fit, new_data = test, type = "prob"))
+```
+
+```{r}
+augment(log_fit, new_data = test) %>%
+  conf_mat(truth = survived, estimate = .pred_class) 
+```
+
+
+```{r}
+multi_metric <- metric_set(accuracy, sensitivity, specificity)
+
+augment(log_fit, new_data = test) %>%
+  multi_metric(truth = survived, estimate = .pred_class)
+```
+
+```{r}
+augment(log_fit, new_data = test) %>%
+  roc_curve(survived, .pred_Yes) %>%
+  autoplot()
+augment(log_fit, new_data = test) %>% 
+  accuracy(truth = survived, estimate = .pred_class)
+```
+
+This model performed well. Testing accuracy is higher than training accuracy. Testing was 0.8268 and training was 0.8005. Because training data set and testing data set are independent, the values differ.
